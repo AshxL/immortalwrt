@@ -1,0 +1,91 @@
+name: Build Clean ImmortalWrt for MI-R4A-100M
+
+on:
+  workflow_dispatch: # 手动触发构建
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Free Disk Space & Install Dependencies
+        run: |
+          # 释放 Actions 运行器的磁盘空间
+          sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          sudo docker image prune --all --force
+          sudo apt-get update
+          sudo apt-get -y install build-essential clang flex bison g++ gawk gcc-multilib g++-multilib gettext git libncurses-dev libssl-dev python3-distutils rsync unzip zlib1g-dev file wget ccache
+
+      - name: Setup ccache
+        run: |
+          # 初始化 ccache，最大限制为 4GB，防止撑爆 GitHub 缓存限制
+          mkdir -p ~/.ccache
+          echo "max_size = 4.0G" > ~/.ccache/ccache.conf
+
+      - name: Clone ImmortalWrt Source
+        run: |
+          # 浅克隆官方主分支，保持纯净环境
+          git clone --depth 1 https://github.com/immortalwrt/immortalwrt.git
+
+      - name: Cache Build Environment
+        uses: actions/cache@v5.1.0
+        with:
+          # 只缓存下载的源码压缩包和 C/C++ 对象编译缓存
+          path: |
+            immortalwrt/dl
+            ~/.ccache
+          # 根据操作系统和 feeds 状态生成精确 Key
+          key: openwrt-cache-${{ runner.os }}-${{ hashFiles('immortalwrt/feeds.conf.default') }}
+          # 恢复策略：如果当前 key 未命中，则回退到匹配此前缀的最新缓存
+          restore-keys: |
+            openwrt-cache-${{ runner.os }}-
+
+      - name: Update & Install Feeds
+        working-directory: immortalwrt
+        run: |
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      - name: Generate Minimal Clean .config
+        working-directory: immortalwrt
+        run: |
+          # 写入极简配置：指定架构、路由器型号、开启 CCACHE 以及保留最基础的 Web 界面
+          cat << 'EOF' > .config
+          CONFIG_TARGET_ramips=y
+          CONFIG_TARGET_ramips_mt76x8=y
+          CONFIG_TARGET_ramips_mt76x8_DEVICE_xiaomi_mi-router-4a-100m=y
+          CONFIG_CCACHE=y
+          CONFIG_PACKAGE_luci=y
+          # 如果不需要任何第三方插件，只要写到这里即可，固件将极其纯净
+          EOF
+          
+          # 根据上述最少配置自动补全所有默认依赖
+          make defconfig
+
+      - name: Download Packages
+        working-directory: immortalwrt
+        run: |
+          # 下载编译需要的所有源码包
+          make download -j8
+          # 删除下载失败的残次文件
+          find dl -size -1024c -exec ls -l {} \;
+          find dl -size -1024c -exec rm -f {} \;
+
+      - name: Compile Firmware
+        working-directory: immortalwrt
+        run: |
+          echo "开始编译！使用了 ccache，如果是二次报错重编将会非常快..."
+          # 多线程编译，如果失败则回退到单线程打印详细报错日志 (V=s)
+          make -j$(nproc) || make -j1 V=s
+
+      - name: Upload Firmware Artifact
+        uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: immortalwrt-clean-mir4a-100m
+          # 抓取生成的固件（sysupgrade.bin 格式为主）
+          path: immortalwrt/bin/targets/ramips/mt76x8/*sysupgrade.bin
+          retention-days: 7
