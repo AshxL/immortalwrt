@@ -1,4 +1,4 @@
-name: Build My Forked ImmortalWrt (MI-R4A-100M)111
+name: Build My Forked ImmortalWrt (cache)
 
 on:
   workflow_dispatch:
