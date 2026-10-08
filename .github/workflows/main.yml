@@ -1,0 +1,100 @@
+name: Build My Forked ImmortalWrt (MI-R4A-100M)111
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+      # 1. 浅克隆代码，节约拉取时间
+      - name: Checkout Forked Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      # 2. 准备依赖环境（去除了耗时且没必要的磁盘清理）
+      - name: Install Essential Dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            bison flex gawk gettext libncurses-dev libssl-dev \
+            rsync unzip zlib1g-dev ccache gcc-multilib g++-multilib
+          sudo apt-get clean
+
+      # 3. 锁定本仓库的 Feeds 专属缓存
+      - name: Cache Feeds
+        uses: actions/cache@v4
+        with:
+          path: feeds
+          # 使用 github.repository 严格锁定当前仓库
+          key: ${{ github.repository }}-feeds-${{ github.run_id }}
+          restore-keys: |
+            ${{ github.repository }}-feeds-
+
+      # 4. 更新并安装 Feeds
+      - name: Update & Install Feeds
+        run: |
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      # 5. 锁定本仓库的 dl（外部源码包）专属缓存
+      - name: Cache Download Packages (dl)
+        uses: actions/cache@v4
+        with:
+          path: dl
+          # 命中本仓库最近一次的 dl 包，并允许本轮新增包写入
+          key: ${{ github.repository }}-dl-${{ github.run_id }}
+          restore-keys: |
+            ${{ github.repository }}-dl-
+
+      # 6. 生成包含 mwan3 的 .config
+      - name: Generate Minimal Clean .config
+        run: |
+          cat << 'EOF' > .config
+          CONFIG_TARGET_ramips=y
+          CONFIG_TARGET_ramips_mt76x8=y
+          CONFIG_TARGET_ramips_mt76x8_DEVICE_xiaomi_mi-router-4a-100m=y
+          CONFIG_CCACHE=y
+          CONFIG_PACKAGE_luci=y
+
+          # ========== MWAN3 多WAN负载均衡插件 ==========
+          CONFIG_PACKAGE_mwan3=y
+          CONFIG_PACKAGE_luci-app-mwan3=y
+          CONFIG_PACKAGE_luci-i18n-mwan3-zh-cn=y
+          EOF
+          
+          make defconfig
+
+      # 7. 下载外部依赖（由于命中本仓库 dl 缓存，秒级核对跳过）
+      - name: Download Packages
+        run: |
+          make download -j8
+          find dl -size -1024c -exec ls -l {} \;
+          find dl -size -1024c -exec rm -f {} \;
+
+      # 8. 锁定本仓库专属工具链及 ccache（跳过编译 Tools & Toolchain）
+      - name: Cache Toolchain & ccache
+        uses: stupidloud/cachewrtbuild@main
+        with:
+          ccache: 'true'
+          toolchain: 'true'
+          skip: 'true'
+          mixkey: '${{ github.repository }}-toolchain-mt76x8'
+          prefix: ${{ github.workspace }}
+
+      # 9. 编译固件
+      - name: Compile Firmware
+        run: |
+          echo "开始极速编译..."
+          make -j$(nproc) || make -j1 V=s
+
+      # 10. 上传生成的固件
+      - name: Upload Firmware Artifact
+        uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: immortalwrt-mir4a-100m-sysupgrade
+          path: bin/targets/ramips/mt76x8/*sysupgrade.bin
+          retention-days: 7
