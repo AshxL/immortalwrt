@@ -41,41 +41,58 @@
 };
 
 &partitions {
-	/* 删除上游 .dtsi 默认继承的小米原厂分区，防止发生重叠冲突 */
+	/* 1. 彻底删除 .dtsi 继承下来的全部 5 个旧原厂分区，清除旧标签冲突 */
+	/delete-node/ partition@0;
+	/delete-node/ partition@20000;
+	/delete-node/ partition@30000;
 	/delete-node/ partition@40000;
 	/delete-node/ partition@50000;
-	/delete-node/ partition@60000;
-	/delete-node/ partition@160000;
 
-	/* 对齐你提取出来的 0x40000 Factory 分区，这是 Breed 刷机识别 Wi-Fi EEPROM 的绝对位置 */
+	/* 2. 重建为你固件所需的 Breed 16MB 纯净闪存布局 */
+	partition@0 {
+		label = "u-boot";
+		reg = <0x0 0x30000>;
+		read-only;
+	};
+
+	partition@30000 {
+		label = "u-boot-env";
+		reg = <0x30000 0x10000>;
+	};
+
 	partition@40000 {
 		label = "factory";
 		reg = <0x40000 0x10000>;
 		read-only;
 
-		/* 重建 MAC 和 EEPROM 偏移寻址，防止编译时出现 phandle not found 的致命报错 */
 		nvmem-layout {
 			compatible = "fixed-layout";
 			#address-cells = <1>;
 			#size-cells = <1>;
 
+			/* 2.4G Wi-Fi 必需校准数据 (供 .dtsi 的 &wmac 节点使用) */
+			eeprom_factory_0: eeprom@0 {
+				reg = <0x0 0x400>;
+			};
+
+			/* 路由器 MAC 地址 (供 &ethernet 节点使用) */
 			macaddr_factory_4: macaddr@4 {
 				compatible = "mac-base";
 				reg = <0x4 0x6>;
 				#nvmem-cell-cells = <1>;
 			};
-			
+
+			/* 5G Wi-Fi 必需校准数据 (供 &pcie0 wifi 节点使用) */
 			eeprom_factory_8000: eeprom@8000 {
 				reg = <0x8000 0x200>;
 			};
 		};
 	};
 
-	/* 标准的 Firmware 分区，从 0x50000 起始，吃满剩下的 16M 空间 */
 	partition@50000 {
+		compatible = "denx,uimage";
 		label = "firmware";
 		reg = <0x50000 0xfb0000>;
-		compatible = "denx,uimage";
 	};
 };
 
