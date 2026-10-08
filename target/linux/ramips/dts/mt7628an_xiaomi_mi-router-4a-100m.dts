@@ -41,15 +41,40 @@
 };
 
 &partitions {
-	partition@60000 {
-		label = "overlay";
-		reg = <0x60000 0x100000>;
+	/* 删除上游 .dtsi 默认继承的小米原厂分区，防止发生重叠冲突 */
+	/delete-node/ partition@40000;
+	/delete-node/ partition@50000;
+	/delete-node/ partition@60000;
+	/delete-node/ partition@160000;
+
+	/* 对齐你提取出来的 0x40000 Factory 分区，这是 Breed 刷机识别 Wi-Fi EEPROM 的绝对位置 */
+	partition@40000 {
+		label = "factory";
+		reg = <0x40000 0x10000>;
 		read-only;
+
+		/* 重建 MAC 和 EEPROM 偏移寻址，防止编译时出现 phandle not found 的致命报错 */
+		nvmem-layout {
+			compatible = "fixed-layout";
+			#address-cells = <1>;
+			#size-cells = <1>;
+
+			macaddr_factory_4: macaddr@4 {
+				compatible = "mac-base";
+				reg = <0x4 0x6>;
+				#nvmem-cell-cells = <1>;
+			};
+			
+			eeprom_factory_8000: eeprom@8000 {
+				reg = <0x8000 0x200>;
+			};
+		};
 	};
 
-	partition@160000 {
+	/* 标准的 Firmware 分区，从 0x50000 起始，吃满剩下的 16M 空间 */
+	partition@50000 {
 		label = "firmware";
-		reg = <0x160000 0xea0000>;
+		reg = <0x50000 0xfb0000>;
 		compatible = "denx,uimage";
 	};
 };
